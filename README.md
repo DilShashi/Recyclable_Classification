@@ -31,7 +31,9 @@ The dataset used in this project is the **Recyclable and Household Waste Classif
 - Images: Provided in PNG format with 256x256 resolution.
 
 ### Download the Dataset
-The dataset is too large to be included directly in this repository. Download it from [Kaggle](https://www.kaggle.com/datasets/alistairking/recyclable-and-household-waste-classification) and place the downloaded files into an appropriate folder (e.g., a local `datasets/` directory). 
+The dataset is too large to be included directly in this repository. It will automatically download when executing the code files.
+
+Download it from [Kaggle](https://www.kaggle.com/datasets/alistairking/recyclable-and-household-waste-classification) if needed. 
 
 ---
 
