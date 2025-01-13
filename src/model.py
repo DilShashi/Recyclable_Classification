@@ -1,89 +1,71 @@
-# model.py
-
 import tensorflow as tf
 from tensorflow.keras import layers, models
 from tensorflow.keras.applications import ResNet50
-from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 
-# 3.1 Choose a pretrained feature extractor (ResNet as the backbone)
-def create_feature_extractor(input_shape=(256, 256, 3)):
+# Function to build a classification model using a pretrained feature extractor
+def build_classification_model(input_shape=(256, 256, 3), num_classes=2):
+    # Using ResNet50 as a feature extractor (without the top layer)
     base_model = ResNet50(weights='imagenet', include_top=False, input_shape=input_shape)
-    base_model.trainable = False  # Freeze the layers of ResNet50 during initial training
-    return base_model
-
-# 3.2 Build an object detection model from scratch (using bounding boxes)
-# Note: For object detection, we would typically require bounding box annotations.
-# We will create a simplified model to demonstrate localization using bounding boxes.
-def create_object_detection_model(input_shape=(256, 256, 3)):
-    inputs = layers.Input(shape=input_shape)
     
-    # Feature extractor (ResNet backbone)
-    feature_extractor = create_feature_extractor(input_shape)
-    x = feature_extractor(inputs)
+    # Freeze early layers and allow the later layers to be fine-tuned
+    for layer in base_model.layers[:100]:  # Freeze the first 100 layers
+        layer.trainable = False
     
-    # Flatten and add dense layers for bounding box prediction
-    x = layers.Flatten()(x)
-    x = layers.Dense(1024, activation='relu')(x)
-    x = layers.Dense(512, activation='relu')(x)
+    model = models.Sequential()
+    model.add(base_model)
     
-    # Predict bounding box coordinates (x_min, y_min, x_max, y_max)
-    bounding_box_output = layers.Dense(4, activation='sigmoid', name='bounding_box')(x)
+    # Add Batch Normalization to improve convergence
+    model.add(layers.GlobalAveragePooling2D())  # Global Average Pooling
+    model.add(layers.BatchNormalization())  # Batch Normalization before activation
+    model.add(layers.Dense(1024, kernel_regularizer=tf.keras.regularizers.l2(0.0005)))  # Slightly stronger regularization
+    model.add(layers.ReLU())  # ReLU activation
+    model.add(layers.Dropout(0.4))  # Lower dropout rate to reduce overfitting while still preventing it
+    model.add(layers.BatchNormalization())  # Additional Batch Normalization
+    model.add(layers.Dense(num_classes, activation='softmax'))  # Output layer with softmax activation
     
-    # Output the class prediction (binary classification: recyclable vs non-recyclable)
-    class_output = layers.Dense(1, activation='sigmoid', name='class')(x)
+    model.compile(optimizer=Adam(learning_rate=0.0001),  # Low learning rate for fine-tuning
+                  loss='sparse_categorical_crossentropy', 
+                  metrics=['accuracy'])
     
-    # Build the model
-    model = models.Model(inputs, [bounding_box_output, class_output])
     return model
 
-# 3.3 Develop the classification model:
-# Build a CNN architecture and fine-tune the model on our dataset
-def create_classification_model(input_shape=(256, 256, 3)):
+# Function to build an object detection model using bounding boxes
+def build_object_detection_model(input_shape=(256, 256, 3), num_classes=2):
     inputs = layers.Input(shape=input_shape)
     
-    # Feature extractor (ResNet backbone)
-    feature_extractor = create_feature_extractor(input_shape)
-    x = feature_extractor(inputs)
+    # Feature extractor (simple CNN layers)
+    x = layers.Conv2D(32, (3, 3), activation='relu')(inputs)
+    x = layers.MaxPooling2D((2, 2))(x)
+    x = layers.Conv2D(64, (3, 3), activation='relu')(x)
+    x = layers.MaxPooling2D((2, 2))(x)
+    x = layers.Conv2D(128, (3, 3), activation='relu')(x)
+    x = layers.MaxPooling2D((2, 2))(x)
     
-    # Flatten and add dense layers for classification
+    # Flatten the features
     x = layers.Flatten()(x)
-    x = layers.Dense(1024, activation='relu')(x)
-    x = layers.Dense(512, activation='relu')(x)
+
+    # Bounding box regression (predicting coordinates)
+    bbox_output = layers.Dense(4, activation='sigmoid', name='bbox_output')(x)
     
-    # Output layer for binary classification (Recyclable vs Non-Recyclable)
-    class_output = layers.Dense(1, activation='sigmoid', name='class')(x)
+    # Classification output
+    class_output = layers.Dense(num_classes, activation='softmax', name='class_output')(x)
     
-    # Build the model
-    model = models.Model(inputs, class_output)
+    model = models.Model(inputs=inputs, outputs=[bbox_output, class_output])
+
+    model.compile(optimizer=Adam(learning_rate=0.0001),
+                  loss={'bbox_output': 'mean_squared_error', 'class_output': 'sparse_categorical_crossentropy'},
+                  metrics={'bbox_output': 'mae', 'class_output': 'accuracy'})
+    
     return model
 
-# Data Augmentation (used in model training if necessary)
-def get_data_augmentation():
-    datagen = ImageDataGenerator(
-        rotation_range=40,
-        width_shift_range=0.2,
-        height_shift_range=0.2,
-        shear_range=0.2,
-        zoom_range=0.2,
-        horizontal_flip=True,
-        fill_mode='nearest'
-    )
-    return datagen
-
-# Compile the models
-def compile_model(model, learning_rate=0.001):
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate),
-        loss={'bounding_box': 'mean_squared_error', 'class': 'binary_crossentropy'},
-        metrics={'bounding_box': 'accuracy', 'class': 'accuracy'}
-    )
-
-# Example of how to use these models:
 if __name__ == "__main__":
-    # Classification model
-    model = create_classification_model(input_shape=(256, 256, 3))
-    model.summary()  # Print the model summary to check architecture
+    # Create classification model
+    classification_model = build_classification_model(input_shape=(256, 256, 3), num_classes=2)
+    classification_model.summary()
     
-    # Object Detection model
-    detection_model = create_object_detection_model(input_shape=(256, 256, 3))
-    detection_model.summary()  # Print the model summary for object detection model
+    # Implement callbacks for early stopping, learning rate reduction, and model checkpoint
+    early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True, verbose=1)
+    lr_scheduler = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=0.00001, verbose=1)
+    model_checkpoint = ModelCheckpoint('best_model.keras', monitor='val_accuracy', save_best_only=True, verbose=1)
